@@ -15,34 +15,35 @@ DATABASE_PATH = os.environ.get(
     str(Path(__file__).resolve().parents[2] / "data" / "autouw.db"),
 )
 APPLICANT_URL = os.environ.get("APPLICANT_SERVICE_URL", "http://127.0.0.1:4100")
-WORKER_URL = os.environ.get("WORKER_SERVICE_URL", "http://127.0.0.1:4101")
-UTILITY_URL = os.environ.get("UTILITY_SERVICE_URL", "http://127.0.0.1:4103")
 
 
 def headers():
     return {"X-Service-Key": SERVICE_SECRET}
 
 
-def fetch_json(url, params=None):
-    r = requests.get(url, params=params, headers=headers(), timeout=15)
+def fetch_json(url):
+    r = requests.get(url, headers=headers(), timeout=15)
     r.raise_for_status()
     return r.json()
 
 
-def analyze_payload(app_row, worker_risk, utility_row):
+def analyze_payload(app_row):
     monthly = float(app_row.get("monthly_income") or 0)
     sum_assured = float(app_row.get("sum_assured") or 0)
     existing_loans = float(app_row.get("existing_loans") or 0)
     health = bool(app_row.get("health_declaration"))
-    occ = (app_row.get("occupation_risk") or "Medium").lower()
+    occ = (app_row.get("occupation_risk") or "medium").lower()
     income_type = (app_row.get("income_type") or "stable").lower()
+    gpay = app_row.get("gpay_history") or {}
+    income_details = app_row.get("income_details") or {}
+    gpay_estimate = float(gpay.get("monthly_estimate") or monthly or 0)
+    declared_annual = float(income_details.get("annual_income") or monthly * 12 or 0)
 
-    variance = float(worker_risk.get("incomeVarianceScore") or 0)
-    dti = worker_risk.get("debtToIncome")
-    dti = float(dti) if dti is not None else (existing_loans / monthly * 100 if monthly > 0 else 0)
-
-    util_score = float(utility_row.get("consistency_score") or 60) if utility_row else 55
-    util_status = (utility_row.get("status") or "pending").lower()
+    variance = min(100.0, abs(gpay_estimate - monthly) / max(monthly, 1) * 100) if monthly > 0 else 40.0
+    dti = (existing_loans / monthly) * 100 if monthly > 0 else 0.0
+    utility_docs = any(d.get("doc_type") == "utility" for d in (app_row.get("documents") or []))
+    util_score = 78.0 if utility_docs else 50.0
+    util_status = "verified" if utility_docs else "pending"
 
     score = 100.0
     fraud = []
@@ -50,7 +51,7 @@ def analyze_payload(app_row, worker_risk, utility_row):
     if income_type == "gig":
         score -= min(25, variance * 0.25)
         if variance > 70:
-            fraud.append("High declared vs. UPI income variance")
+            fraud.append("High declared income variance from GPay estimate")
     else:
         if monthly < 15000:
             score -= 10
@@ -71,23 +72,28 @@ def analyze_payload(app_row, worker_risk, utility_row):
     elif occ == "medium":
         score -= 6
 
+    if gpay_estimate and monthly > 0 and abs(gpay_estimate - monthly) / max(monthly, 1) > 0.5:
+        score -= 10
+        fraud.append("GPay estimate differs significantly from declared income")
+
     if util_score < 55 or util_status == "flagged":
         score -= 15
         fraud.append("Utility verification weak or flagged")
-    elif util_status == "review":
+    elif util_status == "pending":
         score -= 6
-        fraud.append("Utility record requires manual corroboration")
+        fraud.append("Utility document pending verification")
 
-    if worker_risk.get("healthFlag"):
+    if declared_annual > 0 and declared_annual / 12 < monthly * 0.8:
         score -= 5
+        fraud.append("Form income is not aligned with declared monthly income")
 
-    score = max(0, min(100, round(score, 1)))
+    score = max(0.0, min(100.0, round(score, 1)))
 
     if score >= 78:
         classification = "APPROVED"
         eligibility = "Eligible for standard terms"
     elif score >= 52:
-        classification = "REFER"
+        classification = "REFER FOR REVIEW"
         eligibility = "Eligible with conditions / manual referral"
     else:
         classification = "REJECTED"
@@ -95,11 +101,11 @@ def analyze_payload(app_row, worker_risk, utility_row):
 
     cap = monthly * 12 * 0.45 if monthly > 0 else 0
     principal = min(sum_assured or cap, cap) if cap > 0 else min(sum_assured or 0, 250000)
-    principal = round(max(0, principal), 2)
+    principal = round(max(0.0, principal), 2)
 
     if classification == "APPROVED":
         recommendation = "Issue policy with standard premium and verified principal limit."
-    elif classification == "REFER":
+    elif classification == "REFER FOR REVIEW":
         recommendation = "Refer to underwriter: request additional income proof or reduced coverage."
     else:
         recommendation = "Decline or offer alternate micro-cover product after full manual review."
@@ -107,11 +113,11 @@ def analyze_payload(app_row, worker_risk, utility_row):
     parts = [
         f"Composite risk score is {score}/100.",
         f"Utility verification status is '{util_status}' with consistency {util_score:.0f}/100.",
-        f"Income variance indicator is {variance:.0f}/100.",
+        f"GPay consistency variance is {variance:.0f}/100.",
     ]
     if classification == "APPROVED":
         parts.append("Strong alignment across income, utility, and obligation signals supports approval.")
-    elif classification == "REFER":
+    elif classification == "REFER FOR REVIEW":
         parts.append("Mixed signals require human judgment before final terms.")
     else:
         parts.append("Multiple negative factors exceed automated acceptance threshold.")
@@ -145,17 +151,10 @@ def evaluate():
 
     try:
         app_row = fetch_json(f"{APPLICANT_URL}/internal/applications/{app_id}")
-        worker_risk = fetch_json(f"{WORKER_URL}/worker/risk-data", params={"applicationId": app_id})
     except requests.RequestException as e:
-        return jsonify({"error": "Upstream worker/applicant unavailable", "detail": str(e)}), 502
+        return jsonify({"error": "Applicant service unavailable", "detail": str(e)}), 502
 
-    utility_row = None
-    try:
-        utility_row = fetch_json(f"{UTILITY_URL}/api/verification/{app_id}")
-    except requests.RequestException:
-        utility_row = {"status": "pending", "consistency_score": 50, "notes": "Utility service unreachable"}
-
-    result = analyze_payload(app_row, worker_risk, utility_row)
+    result = analyze_payload(app_row)
 
     conn = sqlite3.connect(DATABASE_PATH)
     cur = conn.cursor()

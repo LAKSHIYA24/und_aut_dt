@@ -347,7 +347,7 @@ function ApplicationWorkspace({ data, onRefresh }) {
     setMsg('');
     try {
       await api(`/applications/${data.id}/submit`, { method: 'POST', body: '{}' });
-      setMsg('Submitted for underwriting. Worker and risk services have been notified.');
+      setMsg('Submitted for underwriting. Risk evaluation has been queued.');
       await onRefresh();
     } catch (e) {
       setMsg(e.message);

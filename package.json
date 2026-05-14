@@ -2,6 +2,6 @@
   "name": "autouw-modules",
   "private": true,
   "scripts": {
-    "install:all": "npm install --prefix shared && npm install --prefix modules/applicant-portal/backend && npm install --prefix modules/worker-service/backend && npm install --prefix modules/utility-verification/backend && npm install --prefix modules/underwriter-dashboard/backend && npm install --prefix modules/risk-engine && npm install --prefix modules/applicant-portal/frontend && npm install --prefix modules/worker-service/frontend && npm install --prefix modules/utility-verification/frontend && npm install --prefix modules/underwriter-dashboard/frontend"
+    "install:all": "npm install --prefix shared && npm install --prefix modules/applicant-portal/backend && npm install --prefix modules/underwriter-dashboard/backend && npm install --prefix modules/risk-engine && npm install --prefix modules/applicant-portal/frontend && npm install --prefix modules/underwriter-dashboard/frontend && npm install --prefix frontend"
   }
 }

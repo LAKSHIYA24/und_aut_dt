@@ -7,9 +7,9 @@
     "start:flask": "python -m flask --app app run --host 0.0.0.0 --port 5100"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "mongodb": "^6.3.0"
   }
 }

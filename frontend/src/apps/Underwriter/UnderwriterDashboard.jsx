@@ -1,172 +1,254 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, Badge, Button, Input } from '../../components/ui';
-import { Search, Filter, ShieldAlert, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { Clock, CheckCircle, ShieldAlert, XCircle } from 'lucide-react';
+
+const API = import.meta.env.VITE_UNDERWRITER_API || 'http://127.0.0.1:4102';
+
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString('en-IN');
+}
+
+async function request(path, options = {}) {
+  const token = localStorage.getItem('autouw_uw_token');
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API}${path}`, { ...options, headers });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { raw: text };
+  }
+  if (!res.ok) throw new Error(data.error || data.message || res.statusText);
+  return data;
+}
 
 export default function UnderwriterDashboard() {
-  const [applications, setApplications] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('ALL');
-  const [search, setSearch] = useState('');
+  const [token, setToken] = useState(() => localStorage.getItem('autouw_uw_token'));
+  const [email, setEmail] = useState('admin@autouw.gov');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [cases, setCases] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  const fetchApplications = async () => {
+  async function login() {
+    setError('');
     try {
-      const res = await fetch('http://localhost:5000/api/autouw/applications');
-      const data = await res.json();
-      setApplications(data);
-    } catch (e) {
-      console.error(e);
+      const data = await request('/admin/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      });
+      localStorage.setItem('autouw_uw_token', data.token);
+      setToken(data.token);
+      setPassword('');
+    } catch (err) {
+      setError(err.message);
     }
-    setLoading(false);
-  };
+  }
+
+  async function loadCases() {
+    setLoading(true);
+    setError('');
+    try {
+      const rows = await request('/admin/cases');
+      setCases(rows);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openCase(id) {
+    setSelectedId(id);
+    setError('');
+    try {
+      const result = await request(`/admin/cases/${id}`);
+      setDetail(result);
+    } catch (err) {
+      setError(err.message);
+      setDetail(null);
+    }
+  }
 
   useEffect(() => {
-    fetchApplications();
-    // Refresh every 5 seconds
-    const interval = setInterval(fetchApplications, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    if (token) loadCases();
+  }, [token]);
 
-  const filteredApps = applications.filter(app => {
-    const matchesFilter = filter === 'ALL' || app.decision === filter;
-    const matchesSearch = app.appId?.toLowerCase().includes(search.toLowerCase()) || 
-                          app.name?.toLowerCase().includes(search.toLowerCase());
-    return matchesFilter && matchesSearch;
-  });
+  useEffect(() => {
+    if (!token || selectedId === null) return;
+    const interval = setInterval(() => openCase(selectedId), 15000);
+    return () => clearInterval(interval);
+  }, [token, selectedId]);
+
+  function logout() {
+    localStorage.removeItem('autouw_uw_token');
+    setToken(null);
+    setCases([]);
+    setDetail(null);
+    setSelectedId(null);
+  }
+
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <Card className="w-full max-w-lg">
+          <CardHeader>
+            <CardTitle>Underwriter Access</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-slate-600">Login with your admin credentials to review applicants and risk analytics.</p>
+            <div>
+              <label className="block mb-1 text-sm font-medium text-slate-700">Email</label>
+              <Input value={email} onChange={(e) => setEmail(e.target.value)} />
+            </div>
+            <div>
+              <label className="block mb-1 text-sm font-medium text-slate-700">Password</label>
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <div className="flex justify-end">
+              <Button onClick={login}>Sign in</Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const approvedCount = cases.filter((c) => c.status === 'approved').length;
+  const rejectedCount = cases.filter((c) => c.status === 'rejected').length;
+  const referredCount = cases.filter((c) => c.status === 'refer').length;
+  const submittedCount = cases.filter((c) => c.status === 'submitted').length;
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-        <div>
-          <h1 className="text-3xl font-bold text-govNavy">Underwriter Admin Console</h1>
-          <p className="text-gray-600">Application Queue & AI Risk Assessment Monitoring</p>
-        </div>
-        <div className="flex gap-2 w-full md:w-auto">
-          <div className="relative flex-1 md:w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <Input 
-              placeholder="Search ID or Name" 
-              className="pl-9"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+    <div className="min-h-screen bg-slate-50 px-4 py-6">
+      <div className="mx-auto max-w-6xl space-y-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm uppercase tracking-[0.2em] text-slate-500">AutoUW Admin</p>
+            <h1 className="text-3xl font-semibold text-slate-900">Applicant review dashboard</h1>
+            <p className="mt-1 text-slate-600">View submitted cases, risk classification, and decision counts.</p>
           </div>
-          <select 
-            className="flex h-10 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-govNavy"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          >
-            <option value="ALL">All Decisions</option>
-            <option value="APPROVED">Approved</option>
-            <option value="REJECTED">Rejected</option>
-            <option value="REFER FOR REVIEW">Refer for Review</option>
-          </select>
+          <div className="flex flex-col items-start gap-2 sm:items-end sm:flex-row sm:gap-3">
+            <Button variant="outline" onClick={loadCases} disabled={loading}>
+              Refresh queue
+            </Button>
+            <Button variant="destructive" onClick={logout}>Sign out</Button>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card className="bg-slate-50 border-slate-200">
+            <CardContent className="space-y-2">
+              <p className="text-sm font-medium text-slate-500">Submitted</p>
+              <p className="text-3xl font-semibold text-slate-900">{submittedCount}</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-emerald-50 border-emerald-200">
+            <CardContent className="space-y-2">
+              <p className="text-sm font-medium text-emerald-700">Approved</p>
+              <p className="text-3xl font-semibold text-emerald-900">{approvedCount}</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-yellow-50 border-yellow-200">
+            <CardContent className="space-y-2">
+              <p className="text-sm font-medium text-yellow-700">Referred</p>
+              <p className="text-3xl font-semibold text-yellow-900">{referredCount}</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-red-50 border-red-200">
+            <CardContent className="space-y-2">
+              <p className="text-sm font-medium text-red-700">Rejected</p>
+              <p className="text-3xl font-semibold text-red-900">{rejectedCount}</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[320px_1fr]">
+          <Card className="h-fit">
+            <CardHeader>
+              <CardTitle>Case queue</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {loading && <p className="text-sm text-slate-500">Loading cases…</p>}
+              {error && <p className="text-sm text-red-600">{error}</p>}
+              {cases.length === 0 && !loading ? (
+                <p className="text-sm text-slate-500">No cases available yet.</p>
+              ) : (
+                cases.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    onClick={() => openCase(c.id)}
+                    className={`w-full rounded-xl border px-4 py-3 text-left transition ${
+                      selectedId === c.id ? 'border-slate-900 bg-slate-100' : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2 text-sm text-slate-700">
+                      <span>#{c.id}</span>
+                      <span className="font-semibold capitalize">{c.status}</span>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-500">{c.applicant_email}</p>
+                  </button>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Case details</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!detail ? (
+                <p className="text-sm text-slate-500">Select a case from the queue to see the latest application and risk score.</p>
+              ) : (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <p className="text-sm text-slate-500">Applicant</p>
+                      <p className="font-semibold text-slate-900">{detail.application?.applicant_email}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-500">Status</p>
+                      <Badge variant={detail.risk?.classification === 'APPROVED' ? 'success' : detail.risk?.classification === 'REJECTED' ? 'danger' : 'warning'}>
+                        {detail.risk?.classification || detail.application?.status || 'Pending'}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div>
+                      <p className="text-sm text-slate-500">Coverage</p>
+                      <p className="font-semibold text-slate-900">{detail.application?.coverage_type || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-500">Monthly income</p>
+                      <p className="font-semibold text-slate-900">₹{formatNumber(detail.application?.monthly_income)}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-500">Sum assured</p>
+                      <p className="font-semibold text-slate-900">₹{formatNumber(detail.application?.sum_assured)}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-2 rounded-2xl bg-slate-50 p-4">
+                    <p className="text-sm text-slate-500">Risk score</p>
+                    <p className="text-4xl font-semibold text-slate-900">{detail.risk?.risk_score ?? 'N/A'}</p>
+                    <p className="text-sm text-slate-600">{detail.risk?.recommendation || 'No risk recommendation yet.'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-500">Notes</p>
+                    <p className="whitespace-pre-wrap text-sm text-slate-700">{detail.risk?.explanation || 'No explanation available.'}</p>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        <Card className="bg-blue-50 border-blue-100">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-blue-800 text-sm font-medium">Total Applications</p>
-              <h3 className="text-2xl font-bold text-blue-900">{applications.length}</h3>
-            </div>
-            <div className="p-2 bg-blue-100 rounded-full"><Clock className="w-5 h-5 text-blue-600"/></div>
-          </CardContent>
-        </Card>
-        <Card className="bg-green-50 border-green-100">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-green-800 text-sm font-medium">Auto-Approved</p>
-              <h3 className="text-2xl font-bold text-green-900">
-                {applications.filter(a => a.decision === 'APPROVED').length}
-              </h3>
-            </div>
-            <div className="p-2 bg-green-100 rounded-full"><CheckCircle className="w-5 h-5 text-green-600"/></div>
-          </CardContent>
-        </Card>
-        <Card className="bg-yellow-50 border-yellow-100">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-yellow-800 text-sm font-medium">Referred for Review</p>
-              <h3 className="text-2xl font-bold text-yellow-900">
-                {applications.filter(a => a.decision === 'REFER FOR REVIEW').length}
-              </h3>
-            </div>
-            <div className="p-2 bg-yellow-100 rounded-full"><ShieldAlert className="w-5 h-5 text-yellow-600"/></div>
-          </CardContent>
-        </Card>
-        <Card className="bg-red-50 border-red-100">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-red-800 text-sm font-medium">Rejected</p>
-              <h3 className="text-2xl font-bold text-red-900">
-                {applications.filter(a => a.decision === 'REJECTED').length}
-              </h3>
-            </div>
-            <div className="p-2 bg-red-100 rounded-full"><XCircle className="w-5 h-5 text-red-600"/></div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Application Queue</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-gray-50 border-b">
-                <tr>
-                  <th className="px-6 py-3 text-gray-500 font-medium">App ID</th>
-                  <th className="px-6 py-3 text-gray-500 font-medium">Applicant</th>
-                  <th className="px-6 py-3 text-gray-500 font-medium">Category</th>
-                  <th className="px-6 py-3 text-gray-500 font-medium">Risk Score</th>
-                  <th className="px-6 py-3 text-gray-500 font-medium">Flags</th>
-                  <th className="px-6 py-3 text-gray-500 font-medium">Decision</th>
-                  <th className="px-6 py-3 text-gray-500 font-medium">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan="7" className="text-center py-8 text-gray-500">Loading queue...</td></tr>
-                ) : filteredApps.length === 0 ? (
-                  <tr><td colSpan="7" className="text-center py-8 text-gray-500">No applications found.</td></tr>
-                ) : (
-                  filteredApps.slice().reverse().map((app, idx) => (
-                    <tr key={idx} className="border-b hover:bg-gray-50">
-                      <td className="px-6 py-4 font-mono font-medium text-gray-900">{app.appId}</td>
-                      <td className="px-6 py-4">{app.name || 'Unknown'}</td>
-                      <td className="px-6 py-4 capitalize">{app.incomeType}</td>
-                      <td className="px-6 py-4">
-                        <span className={`font-bold ${app.riskScore >= 80 ? 'text-green-600' : app.riskScore >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>
-                          {app.riskScore}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        {app.fraudFlags?.length > 0 ? (
-                          <span className="flex items-center text-red-600 text-xs font-semibold gap-1">
-                            <ShieldAlert className="w-3 h-3" /> {app.fraudFlags.length} Flags
-                          </span>
-                        ) : (
-                          <span className="text-gray-400 text-xs">None</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge variant={app.decision === 'APPROVED' ? 'success' : app.decision === 'REJECTED' ? 'danger' : 'warning'}>
-                          {app.decision}
-                        </Badge>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Button variant="outline" className="text-xs h-8 px-3">View Details</Button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

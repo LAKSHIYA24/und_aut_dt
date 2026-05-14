@@ -7,7 +7,8 @@ import multer from 'multer';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { fileURLToPath } from 'url';
-import { getDb, assertService, getDbPath } from '../../../shared/database.js';
+import { getDb, assertService } from '../../../shared/database.js';
+import { ObjectId } from 'mongodb';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4100);
@@ -18,7 +19,11 @@ const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '2mb' }));
 
-const db = getDb();
+let db;
+
+(async () => {
+  db = await getDb();
+})();
 
 function authRequired(req, res, next) {
   const h = req.headers.authorization;
@@ -36,161 +41,185 @@ function signUser(user) {
   return jwt.sign({ sub: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
 }
 
-app.post('/auth/signup', (req, res) => {
+app.post('/auth/signup', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password || password.length < 8) {
     return res.status(400).json({ error: 'Email and password (min 8 chars) required' });
   }
   try {
     const hash = bcrypt.hashSync(password, 10);
-    const info = db.prepare(`INSERT INTO users (email, password_hash, role) VALUES (?,?, 'applicant')`).run(
-      String(email).toLowerCase().trim(),
-      hash
-    );
-    const user = db.prepare(`SELECT id, email, role FROM users WHERE id = ?`).get(info.lastInsertRowid);
+    const result = await db.collection('users').insertOne({
+      email: String(email).toLowerCase().trim(),
+      password_hash: hash,
+      role: 'applicant',
+      created_at: new Date()
+    });
+    const user = await db.collection('users').findOne({ _id: result.insertedId }, { projection: { id: '$_id', email: 1, role: 1 } });
+    user.id = user._id.toString();
+    delete user._id;
     res.json({ token: signUser(user), user });
   } catch (e) {
-    if (String(e).includes('UNIQUE')) return res.status(409).json({ error: 'Email already registered' });
+    if (e.code === 11000) return res.status(409).json({ error: 'Email already registered' });
     console.error(e);
     res.status(500).json({ error: 'Signup failed' });
   }
 });
 
-app.post('/auth/login', (req, res) => {
+app.post('/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
-  const user = db.prepare(`SELECT id, email, role, password_hash FROM users WHERE email = ?`).get(
-    String(email || '').toLowerCase().trim()
-  );
+  const user = await db.collection('users').findOne({ email: String(email || '').toLowerCase().trim() });
   if (!user || !bcrypt.compareSync(password || '', user.password_hash)) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
   const { password_hash, ...pub } = user;
+  pub.id = user._id.toString();
   res.json({ token: signUser(pub), user: pub });
 });
 
-app.get('/auth/me', authRequired, (req, res) => {
-  const user = db.prepare(`SELECT id, email, role FROM users WHERE id = ?`).get(req.user.sub);
+app.get('/auth/me', authRequired, async (req, res) => {
+  const user = await db.collection('users').findOne({ _id: new ObjectId(req.user.sub) });
   if (!user) return res.status(401).json({ error: 'User not found' });
-  res.json(user);
+  const { password_hash, ...pub } = user;
+  pub.id = user._id.toString();
+  res.json(pub);
 });
 
-app.post('/applications', authRequired, (req, res) => {
-  const info = db
-    .prepare(
-      `INSERT INTO applications (user_id, status) VALUES (?, 'draft')`
-    )
-    .run(req.user.sub);
-  res.json({ id: info.lastInsertRowid });
+app.post('/applications', authRequired, async (req, res) => {
+  const result = await db.collection('applications').insertOne({
+    user_id: new ObjectId(req.user.sub),
+    status: 'draft',
+    created_at: new Date(),
+    updated_at: new Date()
+  });
+  res.json({ id: result.insertedId.toString() });
 });
 
-app.get('/applications', authRequired, (req, res) => {
-  const rows = db
-    .prepare(`SELECT * FROM applications WHERE user_id = ? ORDER BY id DESC`)
-    .all(req.user.sub);
+app.get('/applications', authRequired, async (req, res) => {
+  const rows = await db.collection('applications').find({ user_id: new ObjectId(req.user.sub) }).sort({ _id: -1 }).toArray();
+  rows.forEach(r => {
+    r.id = r._id.toString();
+    delete r._id;
+  });
   res.json(rows);
 });
 
-app.get('/applications/:id', authRequired, (req, res) => {
-  const id = Number(req.params.id);
-  const row = db.prepare(`SELECT * FROM applications WHERE id = ? AND user_id = ?`).get(id, req.user.sub);
+app.get('/applications/:id', authRequired, async (req, res) => {
+  const id = req.params.id;
+  const row = await db.collection('applications').findOne({ _id: new ObjectId(id), user_id: new ObjectId(req.user.sub) });
   if (!row) return res.status(404).json({ error: 'Not found' });
-  const docs = db.prepare(`SELECT id, doc_type, original_name, created_at FROM documents WHERE application_id = ?`).all(id);
-  const income = db.prepare(`SELECT * FROM income_details WHERE application_id = ?`).get(id);
-  const gpay = db.prepare(`SELECT * FROM gpay_history WHERE application_id = ?`).get(id);
+  const docs = await db.collection('documents').find({ application_id: new ObjectId(id) }).project({ id: '$_id', doc_type: 1, original_name: 1, created_at: 1 }).toArray();
+  docs.forEach(d => {
+    d.id = d._id.toString();
+    delete d._id;
+  });
+  const income = await db.collection('income_details').findOne({ application_id: new ObjectId(id) });
+  if (income) {
+    income.id = income._id.toString();
+    delete income._id;
+  }
+  const gpay = await db.collection('gpay_history').findOne({ application_id: new ObjectId(id) });
+  if (gpay) {
+    gpay.id = gpay._id.toString();
+    delete gpay._id;
+  }
+  row.id = row._id.toString();
+  delete row._id;
   res.json({ ...row, documents: docs, income_details: income, gpay_history: gpay });
 });
 
-app.patch('/applications/:id/insurance', authRequired, (req, res) => {
-  const id = Number(req.params.id);
-  const appRow = db.prepare(`SELECT id FROM applications WHERE id = ? AND user_id = ?`).get(id, req.user.sub);
+app.patch('/applications/:id/insurance', authRequired, async (req, res) => {
+  const id = req.params.id;
+  const appRow = await db.collection('applications').findOne({ _id: new ObjectId(id), user_id: new ObjectId(req.user.sub) });
   if (!appRow) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
-  db.prepare(
-    `UPDATE applications SET
-      coverage_type = COALESCE(?, coverage_type),
-      sum_assured = COALESCE(?, sum_assured),
-      tenure_months = COALESCE(?, tenure_months),
-      monthly_income = COALESCE(?, monthly_income),
-      income_type = COALESCE(?, income_type),
-      health_declaration = COALESCE(?, health_declaration),
-      existing_loans = COALESCE(?, existing_loans),
-      occupation_risk = COALESCE(?, occupation_risk),
-      address_line = COALESCE(?, address_line),
-      city = COALESCE(?, city),
-      state = COALESCE(?, state),
-      pincode = COALESCE(?, pincode),
-      updated_at = datetime('now')
-    WHERE id = ?`
-  ).run(
-    b.coverage_type ?? null,
-    b.sum_assured ?? null,
-    b.tenure_months ?? null,
-    b.monthly_income ?? null,
-    b.income_type ?? null,
-    b.health_declaration != null ? (b.health_declaration ? 1 : 0) : null,
-    b.existing_loans ?? null,
-    b.occupation_risk ?? null,
-    b.address_line ?? null,
-    b.city ?? null,
-    b.state ?? null,
-    b.pincode ?? null,
-    id
-  );
+  const update = {};
+  if (b.coverage_type !== undefined) update.coverage_type = b.coverage_type;
+  if (b.sum_assured !== undefined) update.sum_assured = b.sum_assured;
+  if (b.tenure_months !== undefined) update.tenure_months = b.tenure_months;
+  if (b.monthly_income !== undefined) update.monthly_income = b.monthly_income;
+  if (b.income_type !== undefined) update.income_type = b.income_type;
+  if (b.health_declaration !== undefined) update.health_declaration = b.health_declaration ? 1 : 0;
+  if (b.existing_loans !== undefined) update.existing_loans = b.existing_loans;
+  if (b.occupation_risk !== undefined) update.occupation_risk = b.occupation_risk;
+  if (b.address_line !== undefined) update.address_line = b.address_line;
+  if (b.city !== undefined) update.city = b.city;
+  if (b.state !== undefined) update.state = b.state;
+  if (b.pincode !== undefined) update.pincode = b.pincode;
+  update.updated_at = new Date();
+  await db.collection('applications').updateOne({ _id: new ObjectId(id) }, { $set: update });
   res.json({ ok: true });
 });
 
 fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
 const upload = multer({ dest: UPLOAD_ROOT });
 
-app.post('/applications/:id/documents/:docType', authRequired, upload.single('file'), (req, res) => {
-  const id = Number(req.params.id);
+app.post('/applications/:id/documents/:docType', authRequired, upload.single('file'), async (req, res) => {
+  const id = req.params.id;
   const docType = req.params.docType;
   if (!['utility', 'gpay', 'income'].includes(docType)) return res.status(400).json({ error: 'Invalid doc type' });
-  const appRow = db.prepare(`SELECT id FROM applications WHERE id = ? AND user_id = ?`).get(id, req.user.sub);
+  const appRow = await db.collection('applications').findOne({ _id: new ObjectId(id), user_id: new ObjectId(req.user.sub) });
   if (!appRow) return res.status(404).json({ error: 'Not found' });
   if (!req.file) return res.status(400).json({ error: 'File required' });
-  db.prepare(
-    `INSERT INTO documents (application_id, doc_type, original_name, stored_path) VALUES (?,?,?,?)`
-  ).run(id, docType, req.file.originalname || 'upload', req.file.path);
+  await db.collection('documents').insertOne({
+    application_id: new ObjectId(id),
+    doc_type: docType,
+    original_name: req.file.originalname || 'upload',
+    stored_path: req.file.path,
+    created_at: new Date()
+  });
   res.json({ ok: true, path: req.file.path });
 });
 
-app.post('/applications/:id/income-details', authRequired, (req, res) => {
-  const id = Number(req.params.id);
-  const appRow = db.prepare(`SELECT id FROM applications WHERE id = ? AND user_id = ?`).get(id, req.user.sub);
+app.post('/applications/:id/income-details', authRequired, async (req, res) => {
+  const id = req.params.id;
+  const appRow = await db.collection('applications').findOne({ _id: new ObjectId(id), user_id: new ObjectId(req.user.sub) });
   if (!appRow) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
-  const existing = db.prepare(`SELECT id FROM income_details WHERE application_id = ?`).get(id);
+  const existing = await db.collection('income_details').findOne({ application_id: new ObjectId(id) });
   if (existing) {
-    db.prepare(
-      `UPDATE income_details SET employer_name=?, job_title=?, annual_income=?, notes=? WHERE application_id=?`
-    ).run(b.employer_name || '', b.job_title || '', Number(b.annual_income) || 0, b.notes || '', id);
+    await db.collection('income_details').updateOne(
+      { application_id: new ObjectId(id) },
+      { $set: {
+        employer_name: b.employer_name || '',
+        job_title: b.job_title || '',
+        annual_income: Number(b.annual_income) || 0,
+        notes: b.notes || ''
+      }}
+    );
   } else {
-    db.prepare(
-      `INSERT INTO income_details (application_id, employer_name, job_title, annual_income, notes) VALUES (?,?,?,?,?)`
-    ).run(id, b.employer_name || '', b.job_title || '', Number(b.annual_income) || 0, b.notes || '');
+    await db.collection('income_details').insertOne({
+      application_id: new ObjectId(id),
+      employer_name: b.employer_name || '',
+      job_title: b.job_title || '',
+      annual_income: Number(b.annual_income) || 0,
+      notes: b.notes || '',
+      created_at: new Date()
+    });
   }
   res.json({ ok: true });
 });
 
-app.post('/applications/:id/gpay-history', authRequired, (req, res) => {
-  const id = Number(req.params.id);
-  const appRow = db.prepare(`SELECT id FROM applications WHERE id = ? AND user_id = ?`).get(id, req.user.sub);
+app.post('/applications/:id/gpay-history', authRequired, async (req, res) => {
+  const id = req.params.id;
+  const appRow = await db.collection('applications').findOne({ _id: new ObjectId(id), user_id: new ObjectId(req.user.sub) });
   if (!appRow) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
-  const existing = db.prepare(`SELECT id FROM gpay_history WHERE application_id = ?`).get(id);
+  const existing = await db.collection('gpay_history').findOne({ application_id: new ObjectId(id) });
   if (existing) {
-    db.prepare(`UPDATE gpay_history SET raw_text=?, monthly_estimate=? WHERE application_id=?`).run(
-      b.raw_text || '',
-      Number(b.monthly_estimate) || 0,
-      id
+    await db.collection('gpay_history').updateOne(
+      { application_id: new ObjectId(id) },
+      { $set: {
+        raw_text: b.raw_text || '',
+        monthly_estimate: Number(b.monthly_estimate) || 0
+      }}
     );
   } else {
-    db.prepare(`INSERT INTO gpay_history (application_id, raw_text, monthly_estimate) VALUES (?,?,?)`).run(
-      id,
-      b.raw_text || '',
-      Number(b.monthly_estimate) || 0
-    );
+    await db.collection('gpay_history').insertOne({
+      application_id: new ObjectId(id),
+      raw_text: b.raw_text || '',
+      monthly_estimate: Number(b.monthly_estimate) || 0,
+      created_at: new Date()
+    });
   }
   res.json({ ok: true });
 });
@@ -213,62 +242,74 @@ async function postJson(url, body, headers = {}) {
 }
 
 app.post('/applications/:id/submit', authRequired, async (req, res) => {
-  const id = Number(req.params.id);
-  const appRow = db.prepare(`SELECT * FROM applications WHERE id = ? AND user_id = ?`).get(id, req.user.sub);
+  const id = req.params.id;
+  const appRow = await db.collection('applications').findOne({ _id: new ObjectId(id), user_id: new ObjectId(req.user.sub) });
   if (!appRow) return res.status(404).json({ error: 'Not found' });
-  const docs = db.prepare(`SELECT doc_type FROM documents WHERE application_id = ?`).all(id);
+  const docs = await db.collection('documents').find({ application_id: new ObjectId(id) }).toArray();
   const types = new Set(docs.map((d) => d.doc_type));
   const missing = ['utility', 'gpay', 'income'].filter((t) => !types.has(t));
   if (missing.length) return res.status(400).json({ error: `Missing documents: ${missing.join(', ')}` });
-  const income = db.prepare(`SELECT * FROM income_details WHERE application_id = ?`).get(id);
-  const gpay = db.prepare(`SELECT * FROM gpay_history WHERE application_id = ?`).get(id);
+  const income = await db.collection('income_details').findOne({ application_id: new ObjectId(id) });
+  const gpay = await db.collection('gpay_history').findOne({ application_id: new ObjectId(id) });
   if (!income || !gpay) return res.status(400).json({ error: 'Income details and GPay history required' });
   if (!appRow.monthly_income || !appRow.coverage_type) return res.status(400).json({ error: 'Complete insurance form first' });
 
   const serviceKey = process.env.SERVICE_SECRET || 'dev-service-secret';
-  const workerUrl = process.env.WORKER_SERVICE_URL || 'http://127.0.0.1:4101';
   const riskUrl = process.env.RISK_ENGINE_URL || 'http://127.0.0.1:5100';
-  const utilUrl = process.env.UTILITY_SERVICE_URL || 'http://127.0.0.1:4103';
 
-  try {
-    await postJson(`${utilUrl}/internal/utility/analyze`, { applicationId: id }, { 'X-Service-Key': serviceKey });
-  } catch (e) {
-    console.warn('Utility analyze:', e.message);
-  }
-  try {
-    await postJson(`${workerUrl}/worker/ingest`, { applicationId: id }, { 'X-Service-Key': serviceKey });
-  } catch (e) {
-    return res.status(502).json({ error: 'Worker service unavailable', detail: e.message });
-  }
   try {
     await postJson(`${riskUrl}/risk/evaluate`, { applicationId: id }, { 'X-Service-Key': serviceKey });
   } catch (e) {
     return res.status(502).json({ error: 'Risk engine unavailable', detail: e.message });
   }
-  db.prepare(`UPDATE applications SET status = 'submitted', updated_at = datetime('now') WHERE id = ?`).run(id);
+
+  await db.collection('applications').updateOne({ _id: new ObjectId(id) }, { $set: { status: 'submitted', updated_at: new Date() } });
   res.json({ ok: true, status: 'submitted' });
 });
 
-app.get('/internal/applications', assertService, (_req, res) => {
-  const rows = db
-    .prepare(
-      `SELECT a.id, a.user_id, a.status, a.coverage_type, a.updated_at, u.email AS applicant_email
-       FROM applications a JOIN users u ON u.id = a.user_id ORDER BY a.id DESC`
-    )
-    .all();
+app.get('/internal/applications', assertService, async (_req, res) => {
+  const rows = await db.collection('applications').aggregate([
+    { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'user' } },
+    { $unwind: '$user' },
+    { $project: { id: '$_id', user_id: 1, status: 1, coverage_type: 1, updated_at: 1, applicant_email: '$user.email' } },
+    { $sort: { _id: -1 } }
+  ]).toArray();
+  rows.forEach(r => {
+    r.id = r._id.toString();
+    delete r._id;
+  });
   res.json(rows);
 });
 
-app.get('/internal/applications/:id', assertService, (req, res) => {
-  const id = Number(req.params.id);
-  const row = db.prepare(`SELECT a.*, u.email as applicant_email FROM applications a JOIN users u ON u.id = a.user_id WHERE a.id = ?`).get(id);
+app.get('/internal/applications/:id', assertService, async (req, res) => {
+  const id = req.params.id;
+  const row = await db.collection('applications').aggregate([
+    { $match: { _id: new ObjectId(id) } },
+    { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'user' } },
+    { $unwind: '$user' },
+    { $project: { id: '$_id', user_id: 1, status: 1, coverage_type: 1, updated_at: 1, applicant_email: '$user.email', ...Object.fromEntries(Object.keys(await db.collection('applications').findOne({ _id: new ObjectId(id) })).filter(k => !['_id', 'user_id'].includes(k)).map(k => [k, 1])) } }
+  ]).next();
   if (!row) return res.status(404).json({ error: 'Not found' });
-  const docs = db.prepare(`SELECT id, doc_type, original_name, created_at FROM documents WHERE application_id = ?`).all(id);
-  const income = db.prepare(`SELECT * FROM income_details WHERE application_id = ?`).get(id);
-  const gpay = db.prepare(`SELECT * FROM gpay_history WHERE application_id = ?`).get(id);
+  const docs = await db.collection('documents').find({ application_id: new ObjectId(id) }).project({ id: '$_id', doc_type: 1, original_name: 1, created_at: 1 }).toArray();
+  docs.forEach(d => {
+    d.id = d._id.toString();
+    delete d._id;
+  });
+  const income = await db.collection('income_details').findOne({ application_id: new ObjectId(id) });
+  if (income) {
+    income.id = income._id.toString();
+    delete income._id;
+  }
+  const gpay = await db.collection('gpay_history').findOne({ application_id: new ObjectId(id) });
+  if (gpay) {
+    gpay.id = gpay._id.toString();
+    delete gpay._id;
+  }
+  row.id = row._id.toString();
+  delete row._id;
   res.json({ ...row, documents: docs, income_details: income, gpay_history: gpay });
 });
 
-app.get('/health', (_req, res) => res.json({ ok: true, db: getDbPath() }));
+app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => console.log(`Applicant API on ${PORT}`));
