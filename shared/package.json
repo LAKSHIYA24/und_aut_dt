@@ -1,0 +1,10 @@
+{
+  "name": "@autouw/shared-db",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "autouw-modules": "file:..",
+    "bcryptjs": "^3.0.2",
+    "better-sqlite3": "^11.10.0"
+  }
+}
