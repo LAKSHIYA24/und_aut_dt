@@ -270,8 +270,8 @@ app.post('/applications/:id/submit', authRequired, async (req, res) => {
 app.get('/internal/applications', assertService, async (_req, res) => {
   const rows = await db.collection('applications').aggregate([
     { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'user' } },
-    { $unwind: '$user' },
-    { $project: { id: '$_id', user_id: 1, status: 1, coverage_type: 1, updated_at: 1, applicant_email: '$user.email' } },
+    { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+    { $project: { id: '$_id', user_id: 1, status: 1, coverage_type: 1, updated_at: 1, applicant_email: { $ifNull: ['$user.email', '$applicant_email'] } } },
     { $sort: { _id: -1 } }
   ]).toArray();
   rows.forEach(r => {
@@ -286,25 +286,43 @@ app.get('/internal/applications/:id', assertService, async (req, res) => {
   const row = await db.collection('applications').aggregate([
     { $match: { _id: new ObjectId(id) } },
     { $lookup: { from: 'users', localField: 'user_id', foreignField: '_id', as: 'user' } },
-    { $unwind: '$user' },
-    { $project: { id: '$_id', user_id: 1, status: 1, coverage_type: 1, updated_at: 1, applicant_email: '$user.email', ...Object.fromEntries(Object.keys(await db.collection('applications').findOne({ _id: new ObjectId(id) })).filter(k => !['_id', 'user_id'].includes(k)).map(k => [k, 1])) } }
+    { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+    { $project: { id: '$_id', user_id: 1, status: 1, coverage_type: 1, updated_at: 1, applicant_email: { $ifNull: ['$user.email', '$applicant_email'] }, documents: 1, income_details: 1, gpay_history: 1, coverage_type: 1, monthly_income: 1, sum_assured: 1, income_type: 1, address_line: 1, city: 1, state: 1, pincode: 1, existing_loans: 1, occupation_risk: 1, health_declaration: 1, notes: 1 } }
   ]).next();
   if (!row) return res.status(404).json({ error: 'Not found' });
-  const docs = await db.collection('documents').find({ application_id: new ObjectId(id) }).project({ id: '$_id', doc_type: 1, original_name: 1, created_at: 1 }).toArray();
-  docs.forEach(d => {
+  const docs = await db.collection('documents').find({ application_id: new ObjectId(id) }).project({ id: '$_id', doc_type: 1, type: 1, original_name: 1, created_at: 1 }).toArray();
+  docs.forEach((d) => {
     d.id = d._id.toString();
     delete d._id;
+    if (!d.doc_type && d.type) d.doc_type = d.type;
+    delete d.type;
   });
-  const income = await db.collection('income_details').findOne({ application_id: new ObjectId(id) });
-  if (income) {
-    income.id = income._id.toString();
+
+  const rawIncome = await db.collection('income_details').findOne({ application_id: new ObjectId(id) });
+  let income = null;
+  if (rawIncome) {
+    income = { ...rawIncome };
+    income.id = rawIncome._id.toString();
     delete income._id;
+    income.annual_income = income.annual_income ?? (Number(income.total_monthly_income || income.salary || 0) || 0);
+    income.employer_name = income.employer_name || income.employer || '';
   }
-  const gpay = await db.collection('gpay_history').findOne({ application_id: new ObjectId(id) });
-  if (gpay) {
-    gpay.id = gpay._id.toString();
-    delete gpay._id;
+
+  const gpayRows = await db.collection('gpay_history').find({ application_id: new ObjectId(id) }).toArray();
+  let gpay = null;
+  if (gpayRows.length) {
+    const source = gpayRows.find((row) => row.monthly_estimate !== undefined) || gpayRows[0];
+    const amountRows = gpayRows.filter((row) => Number.isFinite(row.amount));
+    const averageAmount = amountRows.length
+      ? Math.round(amountRows.reduce((sum, row) => sum + Number(row.amount || 0), 0) / amountRows.length)
+      : undefined;
+    gpay = {
+      id: source._id.toString(),
+      monthly_estimate: source.monthly_estimate ?? averageAmount ?? 0,
+      raw_text: source.raw_text || amountRows.map((row) => (row.month && row.amount ? `${row.month}: ${row.amount}` : '')).filter(Boolean).join('; '),
+    };
   }
+
   row.id = row._id.toString();
   delete row._id;
   res.json({ ...row, documents: docs, income_details: income, gpay_history: gpay });

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 - MongoDB is running on `localhost:27017`
-- Database: `autouw` 
+- Database: `autodb` 
 - Node.js and npm installed
 
 ## Project Structure
@@ -74,8 +74,8 @@ npm run dev
 ## MongoDB Connection Details
 
 All services are configured to connect to:
-- **Connection String**: `mongodb://127.0.0.1:27017/autouw`
-- **Database**: `autouw`
+- **Connection String**: `mongodb://127.0.0.1:27017/autodb`
+- **Database**: `autodb`
 - **Configured in**: Each service's `.env` file (MONGODB_URI and MONGODB_DB)
 
 ### Collections Created Automatically
@@ -146,7 +146,7 @@ cd modules/underwriter-dashboard/frontend && npm run dev
 ### MongoDB Connection Issues
 - Verify MongoDB is running: `mongo --eval "db.version()"`
 - Check connection string in each service's `.env` file
-- Ensure `MONGODB_URI=mongodb://127.0.0.1:27017/autouw`
+- Ensure `MONGODB_URI=mongodb://127.0.0.1:27017/autodb`
 
 ### Port Already in Use
 - Applicant Backend conflicts: Kill process on port 4100
@@ -156,7 +156,7 @@ cd modules/underwriter-dashboard/frontend && npm run dev
 ### Database Reset
 To reset all MongoDB data:
 ```bash
-mongo autouw --eval "db.dropDatabase()"
+mongo autodb --eval "db.dropDatabase()"
 ```
 
 ---

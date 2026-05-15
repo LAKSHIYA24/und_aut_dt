@@ -31,8 +31,8 @@ This repository is now cleaned to run the applicant portal, risk engine, and und
 A MongoDB connection scaffold is available, but the current service logic still uses SQLite for production-readiness and ease of migration.
 
 - Install MongoDB locally.
-- Set `MONGODB_URI` in `.env` to your local Mongo instance, e.g. `mongodb://127.0.0.1:27017/autouw`.
-- Set `MONGODB_DB=autouw` if needed.
+- Set `MONGODB_URI` in `.env` to your local Mongo instance, e.g. `mongodb://127.0.0.1:27017/autodb`.
+- Set `MONGODB_DB=autodb` if needed.
 
 The shared helper file `shared/mongo.js` is added for future MongoDB integration.
 

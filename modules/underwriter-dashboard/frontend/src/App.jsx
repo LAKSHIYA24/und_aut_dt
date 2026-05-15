@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell, Legend } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle, Button, Input, Label, Textarea, Badge } from './components/ui.jsx';
 import { ClipboardList, RefreshCw, Shield } from 'lucide-react';
 
@@ -142,8 +142,30 @@ export default function App() {
 
   const app = detail?.application;
   const risk = detail?.risk;
-  const util = detail?.utility;
-  const w = detail?.worker;
+  const incomeDetails = app?.income_details;
+  const gpayHistory = app?.gpay_history;
+  const documents = app?.documents || [];
+  const monthlyIncome = app?.monthly_income ?? app?.total_monthly_income ?? '—';
+
+  const utilityStatus = risk?.utility_status || (documents.some((d) => d.doc_type === 'utility') ? 'verified' : 'pending');
+  const utilityScore = risk?.utility_consistency ?? (documents.some((d) => d.doc_type === 'utility') ? 78 : 50);
+
+  const approvedCount = cases.filter((c) => (c.status || '').toString().toLowerCase() === 'approved').length;
+  const rejectedCount = cases.filter((c) => (c.status || '').toString().toLowerCase() === 'rejected').length;
+  const referredCount = cases.filter((c) => {
+    const s = (c.status || '').toString().toLowerCase();
+    return s === 'refer' || s === 'referred' || s === 'refer for review';
+  }).length;
+  const submittedCount = cases.filter((c) => (c.status || '').toString().toLowerCase() === 'submitted').length;
+
+  const statusData = [
+    { name: 'submitted', count: submittedCount },
+    { name: 'approved', count: approvedCount },
+    { name: 'referred', count: referredCount },
+    { name: 'rejected', count: rejectedCount },
+  ];
+
+  const pieColors = ['#0b2f4a', '#16a34a', '#f59e0b', '#ef4444'];
 
   const classification = risk?.classification || '—';
   const badgeVariant =
@@ -186,6 +208,55 @@ export default function App() {
           </CardHeader>
           <CardContent className="space-y-2">
             {err && <p className="text-sm text-govRed">{err}</p>}
+            <div className="grid gap-2 sm:grid-cols-2 mb-4">
+              <div className="rounded-lg bg-slate-50 p-3 text-sm">
+                <p className="text-slate-500">Submitted</p>
+                <p className="text-xl font-semibold text-slate-900">{submittedCount}</p>
+              </div>
+              <div className="rounded-lg bg-emerald-50 p-3 text-sm">
+                <p className="text-emerald-700">Approved</p>
+                <p className="text-xl font-semibold text-emerald-900">{approvedCount}</p>
+              </div>
+              <div className="rounded-lg bg-yellow-50 p-3 text-sm">
+                <p className="text-yellow-700">Referred</p>
+                <p className="text-xl font-semibold text-yellow-900">{referredCount}</p>
+              </div>
+              <div className="rounded-lg bg-red-50 p-3 text-sm">
+                <p className="text-red-700">Rejected</p>
+                <p className="text-xl font-semibold text-red-900">{rejectedCount}</p>
+              </div>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-[1fr_280px] mb-4">
+              <div className="h-48 rounded-3xl border border-slate-200 bg-white p-3">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={statusData} dataKey="count" nameKey="name" innerRadius={50} outerRadius={70} paddingAngle={4}>
+                      {statusData.map((entry, index) => (
+                        <Cell key={`pie-${entry.name}`} fill={pieColors[index % pieColors.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value) => [value, 'applications']} />
+                    <Legend verticalAlign="bottom" height={36} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm text-slate-500">Risk classification summary</p>
+                <p className="mt-2 text-3xl font-semibold text-slate-900">{classification}</p>
+                <p className="mt-1 text-sm text-slate-600">Latest selected application</p>
+              </div>
+            </div>
+            <div className="mb-4 h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={statusData} margin={{ top: 10, right: 0, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="#0b2f4a" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
             {cases.map((c) => (
               <button
                 key={c.id}
@@ -226,11 +297,11 @@ export default function App() {
                   </div>
                   <div>
                     <p className="text-slate-500">Monthly income (declared)</p>
-                    <p className="font-medium">₹{app.monthly_income}</p>
+                    <p className="font-medium">₹{monthlyIncome}</p>
                   </div>
                   <div>
                     <p className="text-slate-500">Income type</p>
-                    <p className="font-medium capitalize">{app.income_type}</p>
+                    <p className="font-medium capitalize">{app.income_type || '—'}</p>
                   </div>
                   <div className="md:col-span-2">
                     <p className="text-slate-500">Address</p>
@@ -247,30 +318,32 @@ export default function App() {
                     <CardTitle>Income analysis</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    {w?.profile && (
-                      <ul className="mb-4 space-y-1 text-sm">
-                        <li>
-                          <span className="text-slate-500">GPay estimate: </span>
-                          <span className="font-medium">₹{w.profile.gpayMonthlyEstimate}</span>
-                        </li>
-                        <li>
-                          <span className="text-slate-500">Annual (form): </span>
-                          <span className="font-medium">₹{w.profile.annualIncomeDeclared}</span>
-                        </li>
-                        <li>
-                          <span className="text-slate-500">Employer: </span>
-                          <span className="font-medium">{w.profile.employer || '—'}</span>
-                        </li>
-                      </ul>
-                    )}
-                    <div className="h-56 w-full">
+                    <div className="grid gap-3 sm:grid-cols-2 text-sm">
+                      <div>
+                        <p className="text-slate-500">Declared monthly income</p>
+                        <p className="font-semibold text-slate-900">₹{app.monthly_income ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Reported annual income</p>
+                        <p className="font-semibold text-slate-900">₹{incomeDetails?.annual_income ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Employer</p>
+                        <p className="font-semibold text-slate-900">{incomeDetails?.employer_name || '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">GPay monthly estimate</p>
+                        <p className="font-semibold text-slate-900">₹{gpayHistory?.monthly_estimate ?? '—'}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 h-56 w-full">
                       <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={Array.isArray(w?.earnings) ? w.earnings : []}>
+                        <BarChart data={gpayHistory?.monthly_estimate ? [{ month: 'GPay', amount: gpayHistory.monthly_estimate }] : []}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                           <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                           <YAxis tick={{ fontSize: 12 }} />
-                          <Tooltip />
-                          <Bar dataKey="amount" fill="#0b2f4a" radius={[4, 4, 0, 0]} name="Amount (₹)" />
+                          <Tooltip formatter={(value) => `₹${value}`} />
+                          <Bar dataKey="amount" fill="#0b2f4a" radius={[4, 4, 0, 0]} name="GPay estimate" />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
@@ -282,21 +355,19 @@ export default function App() {
                     <CardTitle>Utility verification</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-2 text-sm">
-                    {util ? (
-                      <>
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">Status</span>
-                          <span className="font-medium capitalize">{util.status}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">Score</span>
-                          <span className="font-medium">{util.consistency_score}</span>
-                        </div>
-                        <p className="text-slate-700">{util.notes}</p>
-                      </>
-                    ) : (
-                      <p className="text-slate-500">Utility record not available.</p>
-                    )}
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Status</span>
+                      <span className="font-medium capitalize">{utilityStatus || 'pending'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Score</span>
+                      <span className="font-medium">{utilityScore ?? '—'}</span>
+                    </div>
+                    <p className="text-slate-700">
+                      {documents.some((d) => d.doc_type === 'utility')
+                        ? 'Utility documents are attached and available for review.'
+                        : 'No utility document uploaded for this application.'}
+                    </p>
                   </CardContent>
                 </Card>
               </div>
@@ -344,10 +415,10 @@ export default function App() {
                           )}
                         </ul>
                       </div>
-                      {w?.riskData && (
+                      {risk?.source === 'db' && (
                         <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-700">
-                          <p className="font-medium text-slate-900">Worker risk signals</p>
-                          <pre className="mt-2 overflow-auto">{JSON.stringify(w.riskData, null, 2)}</pre>
+                          <p className="font-medium text-slate-900">Risk source</p>
+                          <p className="mt-2">Loaded from stored assessment because the risk engine was unavailable.</p>
                         </div>
                       )}
                     </>

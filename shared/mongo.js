@@ -1,7 +1,7 @@
 import { MongoClient } from 'mongodb';
 
 const uri = process.env.MONGODB_URI;
-const dbName = process.env.MONGODB_DB || 'autouw';
+const dbName = process.env.MONGODB_DB || 'autodb';
 let client;
 
 export async function getMongoClient() {

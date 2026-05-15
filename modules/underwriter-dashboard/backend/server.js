@@ -76,10 +76,36 @@ app.get('/admin/cases', adminAuth, async (_req, res) => {
 app.get('/admin/cases/:id', adminAuth, async (req, res) => {
   const id = req.params.id;
   try {
-    const [application, risk] = await Promise.all([
-      fetchJson(`${APPLICANT_URL}/internal/applications/${id}`),
-      fetchJson(`${RISK_URL}/risk/result?applicationId=${id}`).catch(() => null),
-    ]);
+    const application = await fetchJson(`${APPLICANT_URL}/internal/applications/${id}`);
+    let risk = null;
+    try {
+      risk = await fetchJson(`${RISK_URL}/risk/result?applicationId=${id}`);
+    } catch {
+      risk = null;
+    }
+    if (!risk) {
+      const row = await db.collection('risk_assessments').findOne({ application_id: new ObjectId(id) });
+      if (row) {
+        const fraud = row.fraud_indicators_json
+          ? (() => {
+              try {
+                return JSON.parse(row.fraud_indicators_json);
+              } catch {
+                return Array.isArray(row.fraud_indicators_json) ? row.fraud_indicators_json : [];
+              }
+            })()
+          : Array.isArray(row.fraud_indicators)
+          ? row.fraud_indicators
+          : [];
+        risk = {
+          ...row,
+          id: row._id.toString(),
+          fraud_indicators: fraud,
+          source: 'db',
+        };
+        delete risk._id;
+      }
+    }
     res.json({ application, risk });
   } catch (e) {
     res.status(502).json({ error: 'Failed to assemble case', detail: e.message });

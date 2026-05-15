@@ -193,10 +193,20 @@ app.get('/risk/result', assertService, async (req, res) => {
   if (!applicationId) return res.status(400).json({ error: 'applicationId required' });
   const row = await db.collection('risk_assessments').findOne({ application_id: new ObjectId(applicationId) });
   if (!row) return res.status(404).json({ error: 'No assessment' });
-  const { fraud_indicators_json, ...rest } = row;
+  const { fraud_indicators_json, fraud_indicators, ...rest } = row;
   rest.id = rest._id.toString();
   delete rest._id;
-  res.json({ ...rest, fraud_indicators: JSON.parse(fraud_indicators_json) });
+  let parsedFraud = [];
+  if (fraud_indicators_json) {
+    try {
+      parsedFraud = JSON.parse(fraud_indicators_json);
+    } catch {
+      parsedFraud = Array.isArray(fraud_indicators_json) ? fraud_indicators_json : [];
+    }
+  } else if (Array.isArray(fraud_indicators)) {
+    parsedFraud = fraud_indicators;
+  }
+  res.json({ ...rest, fraud_indicators: parsedFraud });
 });
 
 app.listen(PORT, () => console.log(`Risk engine (Node) on ${PORT}`));

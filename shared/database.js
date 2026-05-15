@@ -1,8 +1,8 @@
 import { MongoClient, ObjectId } from 'mongodb';
 import bcrypt from 'bcryptjs';
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/autouw';
-const MONGODB_DB = process.env.MONGODB_DB || 'autouw';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/autodb';
+const MONGODB_DB = process.env.MONGODB_DB || 'autodb';
 
 let client;
 let db;

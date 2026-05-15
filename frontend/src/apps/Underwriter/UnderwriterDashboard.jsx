@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell, Legend } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle, Badge, Button, Input } from '../../components/ui';
 import { Clock, CheckCircle, ShieldAlert, XCircle } from 'lucide-react';
 
@@ -119,10 +120,22 @@ export default function UnderwriterDashboard() {
     );
   }
 
-  const approvedCount = cases.filter((c) => c.status === 'approved').length;
-  const rejectedCount = cases.filter((c) => c.status === 'rejected').length;
-  const referredCount = cases.filter((c) => c.status === 'refer').length;
-  const submittedCount = cases.filter((c) => c.status === 'submitted').length;
+  const approvedCount = cases.filter((c) => (c.status || '').toString().toLowerCase() === 'approved').length;
+  const rejectedCount = cases.filter((c) => (c.status || '').toString().toLowerCase() === 'rejected').length;
+  const referredCount = cases.filter((c) => {
+    const s = (c.status || '').toString().toLowerCase();
+    return s === 'refer' || s === 'referred' || s === 'refer for review';
+  }).length;
+  const submittedCount = cases.filter((c) => (c.status || '').toString().toLowerCase() === 'submitted').length;
+
+  const statusData = [
+    { name: 'submitted', count: submittedCount },
+    { name: 'approved', count: approvedCount },
+    { name: 'referred', count: referredCount },
+    { name: 'rejected', count: rejectedCount },
+  ];
+
+  const pieColors = ['#0b2f4a', '#16a34a', '#f59e0b', '#ef4444'];
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6">
@@ -167,6 +180,25 @@ export default function UnderwriterDashboard() {
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Application status distribution</CardTitle>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={statusData} dataKey="count" nameKey="name" innerRadius={60} outerRadius={90} paddingAngle={4}>
+                  {statusData.map((entry, index) => (
+                    <Cell key={`cell-${entry.name}`} fill={pieColors[index % pieColors.length]} />
+                  ))}
+                </Pie>
+                <Legend verticalAlign="bottom" height={36} />
+                <Tooltip formatter={(value) => [value, 'applications']} />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
 
         <div className="grid gap-6 xl:grid-cols-[320px_1fr]">
           <Card className="h-fit">
@@ -218,6 +250,18 @@ export default function UnderwriterDashboard() {
                       <Badge variant={detail.risk?.classification === 'APPROVED' ? 'success' : detail.risk?.classification === 'REJECTED' ? 'danger' : 'warning'}>
                         {detail.risk?.classification || detail.application?.status || 'Pending'}
                       </Badge>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-sm text-slate-500">Risk classification</p>
+                      <p className="mt-2 text-3xl font-semibold text-slate-900">{detail.risk?.classification || 'Pending'}</p>
+                      <p className="mt-1 text-sm text-slate-600">{detail.risk?.recommendation || 'Awaiting risk assessment'}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-sm text-slate-500">Application status</p>
+                      <p className="mt-2 text-3xl font-semibold text-slate-900 capitalize">{detail.application?.status || 'Pending'}</p>
+                      <p className="mt-1 text-sm text-slate-600">Keep review current with applicant data.</p>
                     </div>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-3">
